@@ -54,6 +54,7 @@ async def create_audio_query(text, speaker=1):
     """
     テキストから音声クエリを生成する
     """
+    print(f"Creating audio query with speaker ID: {speaker}")
     try:
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -75,9 +76,13 @@ async def synthesize_speech(audio_query, speaker=1):
     音声クエリから音声を合成する
     """
     try:
+        print(f"Synthesizing speech with speaker_id: {speaker}")
         async with httpx.AsyncClient() as client:
+            synthesis_url = f"{SYNTHESIS_API_URL}?speaker={speaker}&enable_interrogative_upspeak=true"
+            print(f"Calling synthesis API: {synthesis_url}")
+            
             response = await client.post(
-                f"{SYNTHESIS_API_URL}?speaker={speaker}&enable_interrogative_upspeak=true",
+                synthesis_url,
                 headers={
                     "accept": "audio/wav",
                     "Content-Type": "application/json"
@@ -119,11 +124,22 @@ async def process_chat_and_voice(messages, user_id=None, agent_id=None):
     if not response_text:
         raise HTTPException(status_code=500, detail="No response text received from chat API")
     
+    # エージェントのスピーカーIDを取得
+    speaker_id = 1  # デフォルト値
+    if agent_id:
+        from app.db.database import get_db
+        from app.crud import crud
+        db = next(get_db())
+        db_agent = crud.get_agent(db, agent_id=agent_id)
+        if db_agent and db_agent.voice_speaker_id:
+            speaker_id = db_agent.voice_speaker_id
+            print(f"Using agent's voice_speaker_id: {speaker_id} for chat response synthesis")
+    
     # 音声クエリを生成
     audio_query = await create_audio_query(response_text)
     
     # 音声を合成
-    audio_result = await synthesize_speech(audio_query)
+    audio_result = await synthesize_speech(audio_query, speaker=speaker_id)
     
     # 結果を返す
     return {

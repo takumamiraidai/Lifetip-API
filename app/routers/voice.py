@@ -147,27 +147,44 @@ async def synthesize_voicevox(text: str, agent_id: str):
         print(f"Agent for voice synthesis: {db_agent.name if db_agent else 'Not found'}")
         if db_agent:
             print(f"Agent voice_speaker_id: {db_agent.voice_speaker_id}")
+            print(f"Agent voice_speaker_id type: {type(db_agent.voice_speaker_id)}")
         
         if db_agent and db_agent.voice_speaker_id:
-            speaker_id = db_agent.voice_speaker_id
+            # speaker_idが文字列の場合は整数に変換
+            if isinstance(db_agent.voice_speaker_id, str):
+                try:
+                    speaker_id = int(db_agent.voice_speaker_id)
+                    print(f"Converted string speaker_id '{db_agent.voice_speaker_id}' to int: {speaker_id}")
+                except ValueError:
+                    print(f"Failed to convert speaker_id '{db_agent.voice_speaker_id}' to int, using default")
+            else:
+                speaker_id = db_agent.voice_speaker_id
             
-        print(f"Using speaker_id: {speaker_id} for voice synthesis")
+        print(f"Using speaker_id: {speaker_id} (type: {type(speaker_id)}) for voice synthesis")
         
         # VoiceVoxのAPIエンドポイント（ローカル）
         voicevox_url = "http://localhost:50021"
         
         # 音声クエリを作成
+        query_url = f"{voicevox_url}/audio_query"
+        query_params = {'text': text, 'speaker': speaker_id}
+        print(f"Calling audio_query API: {query_url} with params: {query_params}")
+        
         audio_query_response = requests.post(
-            f"{voicevox_url}/audio_query",
-            params={'text': text, 'speaker': speaker_id}
+            query_url,
+            params=query_params
         )
         audio_query_response.raise_for_status()
         audio_query = audio_query_response.json()
         
         # 音声合成を実行
+        synthesis_url = f"{voicevox_url}/synthesis"
+        synthesis_params = {'speaker': speaker_id}
+        print(f"Calling synthesis API: {synthesis_url} with params: {synthesis_params}")
+        
         synthesis_response = requests.post(
-            f"{voicevox_url}/synthesis",
-            params={'speaker': speaker_id},
+            synthesis_url,
+            params=synthesis_params,
             json=audio_query
         )
         synthesis_response.raise_for_status()
