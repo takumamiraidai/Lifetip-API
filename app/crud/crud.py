@@ -48,11 +48,38 @@ def create_agent(db: Session, agent: schemas.AgentCreate, user_id: str):
 def update_agent(db: Session, agent_id: str, agent: schemas.AgentUpdate):
     db_agent = get_agent(db, agent_id)
     if db_agent:
-        update_data = agent.dict(exclude_unset=True)
+        print(f"Updating agent: {db_agent.name}, ID: {db_agent.agent_id}")
+        
+        # Pydantic v1/v2 互換性対応
+        if hasattr(agent, "dict"):
+            update_data = agent.dict(exclude_unset=True) 
+        else:
+            # Pydantic v2の場合
+            update_data = agent.model_dump(exclude_unset=True)
+            
+        print(f"Update data: {update_data}")            # 特にvoice_speaker_idの更新を確認
+        if 'voice_speaker_id' in update_data:
+            print(f"Updating voice_speaker_id from {db_agent.voice_speaker_id} to {update_data['voice_speaker_id']}")
+            # 型チェックと変換を追加
+            speaker_id = update_data['voice_speaker_id']
+            if speaker_id is not None:
+                try:
+                    # 明示的に整数に変換
+                    speaker_id = int(speaker_id)
+                    update_data['voice_speaker_id'] = speaker_id
+                    print(f"Converted speaker_id to int: {speaker_id}")
+                except (ValueError, TypeError):
+                    print(f"Failed to convert speaker_id to int: {speaker_id}")
+        
         for key, value in update_data.items():
+            # 値を設定する前にもう一度チェック
+            if key == 'voice_speaker_id' and value is not None:
+                print(f"Setting {key}={value} (type: {type(value)})")
             setattr(db_agent, key, value)
+            
         db.commit()
         db.refresh(db_agent)
+        print(f"Updated agent voice_speaker_id: {db_agent.voice_speaker_id}")
     return db_agent
 
 def delete_agent(db: Session, agent_id: str):

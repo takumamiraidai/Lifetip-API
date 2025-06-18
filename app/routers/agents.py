@@ -33,9 +33,12 @@ def read_agent(
     agent_id: str,
     db: Session = Depends(get_db)
 ):
+    print(f"Fetching agent with ID: {agent_id}")
     db_agent = crud.get_agent(db, agent_id=agent_id)
     if db_agent is None:
+        print(f"Agent not found with ID: {agent_id}")
         raise HTTPException(status_code=404, detail="Agent not found")
+    print(f"Agent found: {db_agent.name}")
     return db_agent
 
 @router.put("/{agent_id}", response_model=schemas.AgentResponse)

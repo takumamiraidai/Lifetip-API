@@ -144,8 +144,14 @@ async def synthesize_voicevox(text: str, agent_id: str):
         db_agent = crud.get_agent(db, agent_id=agent_id)
         speaker_id = 1  # デフォルト値
         
+        print(f"Agent for voice synthesis: {db_agent.name if db_agent else 'Not found'}")
+        if db_agent:
+            print(f"Agent voice_speaker_id: {db_agent.voice_speaker_id}")
+        
         if db_agent and db_agent.voice_speaker_id:
             speaker_id = db_agent.voice_speaker_id
+            
+        print(f"Using speaker_id: {speaker_id} for voice synthesis")
         
         # VoiceVoxのAPIエンドポイント（ローカル）
         voicevox_url = "http://localhost:50021"
@@ -198,33 +204,57 @@ async def delete_voice_files(agent_id: str):
     """エージェントの音声ファイルを削除"""
     try:
         deleted_files = []
-        for filename in os.listdir(AUDIO_DIR):
-            if filename.startswith(agent_id):
-                file_path = os.path.join(AUDIO_DIR, filename)
+        
+        # エージェントIDで始まる音声ファイルを削除
+        for file in os.listdir(AUDIO_DIR):
+            if file.startswith(agent_id):
+                file_path = os.path.join(AUDIO_DIR, file)
                 os.remove(file_path)
-                deleted_files.append(filename)
+                deleted_files.append(file)
+                
+        # カスタム音声フラグを更新
+        from app.db.database import get_db
+        db = next(get_db())
+        from app.crud import crud
+        
+        db_agent = crud.get_agent(db, agent_id=agent_id)
+        if db_agent:
+            db_agent.has_custom_voice = False
+            db.commit()
         
         return {
-            "message": f"エージェント {agent_id} の音声ファイルを削除しました",
+            "message": "音声ファイルが正常に削除されました",
             "deleted_files": deleted_files
         }
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"ファイル削除エラー: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"音声ファイル削除エラー: {str(e)}")
 
 @router.get("/voicevox/speakers")
 async def get_voicevox_speakers():
     """VoiceVoxの利用可能なスピーカー一覧を取得"""
     try:
+        # VoiceVoxのAPIエンドポイント（ローカル）
         voicevox_url = "http://localhost:50021"
         
         # スピーカー一覧を取得
         response = requests.get(f"{voicevox_url}/speakers")
         response.raise_for_status()
-        speakers = response.json()
         
         return {
-            "speakers": speakers
+            "speakers": response.json()
         }
+    
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=503, detail=f"VoiceVoxサービスが利用できません: {str(e)}")
+        # VoiceVoxが利用できない場合はモック応答を返す
+        mock_speakers = [
+            {"id": 1, "name": "四国めたん", "styles": [{"id": 2, "name": "ノーマル"}]},
+            {"id": 2, "name": "ずんだもん", "styles": [{"id": 3, "name": "ノーマル"}]},
+            {"id": 3, "name": "春日部つむぎ", "styles": [{"id": 8, "name": "ノーマル"}]},
+            {"id": 8, "name": "波音リツ", "styles": [{"id": 9, "name": "ノーマル"}]},
+            {"id": 10, "name": "玄野武宏", "styles": [{"id": 11, "name": "ノーマル"}]},
+        ]
+        return {
+            "speakers": mock_speakers,
+            "info": "VoiceVoxサービスが利用できないため、モックデータを表示しています"
+        }
