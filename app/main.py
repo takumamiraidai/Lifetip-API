@@ -25,10 +25,18 @@ app = FastAPI(
 # CORSの設定
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 本番環境では適切に制限すること
+    allow_origins=[
+        "http://localhost:3000",  # ローカル開発環境
+        "https://dutch-surgical-speech-bandwidth.trycloudflare.com",  # Cloudflare Tunnelドメイン
+        "https://yesterday-warcraft-older-produced.trycloudflare.com",  # 現在のCloudflare Tunnelドメイン
+        "https://*.trycloudflare.com",  # すべてのCloudflare Tunnelドメイン
+        "https://*.pages.dev",  # Cloudflare Pagesドメイン
+        "*",  # すべてのオリジン（開発中のみ推奨）
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # 静的ファイルの提供設定
