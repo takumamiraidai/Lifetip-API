@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from dotenv import load_dotenv
-from app.routers import users, agents, chat
+from app.routers import users, agents, chat, voice
 from app.db.database import engine
 from app.models import models
 
@@ -38,6 +38,7 @@ app.mount("/audio", StaticFiles(directory="audio_files"), name="audio")
 app.include_router(users.router)
 app.include_router(agents.router)
 app.include_router(chat.router)
+app.include_router(voice.router)
 
 @app.get("/")
 def read_root():

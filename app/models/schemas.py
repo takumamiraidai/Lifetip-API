@@ -22,6 +22,9 @@ class AgentBase(BaseModel):
     tone: str
     personality1: str
     personality2: Optional[str] = None
+    voice_type: Optional[str] = "voicevox"
+    has_custom_voice: Optional[bool] = False
+    voice_speaker_id: Optional[int] = 1  # VoiceVoxのスピーカーID
 
 class AgentCreate(AgentBase):
     pass
@@ -31,6 +34,9 @@ class AgentUpdate(AgentBase):
     tone: Optional[str] = None
     personality1: Optional[str] = None
     personality2: Optional[str] = None
+    voice_type: Optional[str] = None
+    has_custom_voice: Optional[bool] = None
+    voice_speaker_id: Optional[int] = None
 
 class AgentResponse(AgentBase):
     agent_id: str

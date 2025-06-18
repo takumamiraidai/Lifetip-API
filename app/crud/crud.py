@@ -35,7 +35,10 @@ def create_agent(db: Session, agent: schemas.AgentCreate, user_id: str):
         name=agent.name,
         tone=agent.tone,
         personality1=agent.personality1,
-        personality2=agent.personality2
+        personality2=agent.personality2,
+        voice_type=agent.voice_type,
+        has_custom_voice=agent.has_custom_voice,
+        voice_speaker_id=agent.voice_speaker_id
     )
     db.add(db_agent)
     db.commit()

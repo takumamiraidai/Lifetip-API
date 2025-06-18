@@ -1,0 +1,243 @@
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi.responses import FileResponse
+from sqlalchemy.orm import Session
+from app.db.database import get_db
+from app.models import schemas
+from app.crud import crud
+from app.services import api_service
+import os
+import uuid
+import requests
+from typing import Optional, List
+
+router = APIRouter(
+    prefix="/chat",
+    tags=["chat"]
+)
+
+# 音声ファイル保存ディレクトリ
+AUDIO_DIR = "audio_files"
+VOICE_SYNTHESIS_URL = "http://localhost:8000"  # 音声合成APIのURL
+
+async def synthesize_custom_voice_local(text: str, agent_id: str):
+    """カスタム音声による音声合成（ローカル版）"""
+    # アップロードされた音声ファイルを確認
+    audio_files = [f for f in os.listdir(AUDIO_DIR) if f.startswith(agent_id)]
+    if not audio_files:
+        raise HTTPException(status_code=404, detail="このエージェントの音声ファイルが見つかりません")
+    
+    reference_audio = audio_files[0]
+    reference_path = os.path.join(AUDIO_DIR, reference_audio)
+    
+    try:
+        # 外部音声合成APIに送信
+        with open(reference_path, 'rb') as audio_file:
+            files = {
+                'file': audio_file,
+                'filename': (None, agent_id)
+            }
+            
+            # まず音声ファイルをアップロード
+            upload_response = requests.post(
+                f"{VOICE_SYNTHESIS_URL}/upload",
+                files=files
+            )
+            upload_response.raise_for_status()
+        
+        # 音声合成を実行
+        synthesis_data = {
+            'text': text,
+            'wav_filename': reference_audio,
+            'language': 'ja'
+        }
+        
+        synthesis_response = requests.post(
+            f"{VOICE_SYNTHESIS_URL}/generate",
+            data=synthesis_data
+        )
+        synthesis_response.raise_for_status()
+        
+        # 合成された音声ファイルを保存
+        output_filename = f"generated_{agent_id}_{uuid.uuid4().hex[:8]}.wav"
+        output_path = os.path.join(AUDIO_DIR, output_filename)
+        
+        with open(output_path, 'wb') as f:
+            f.write(synthesis_response.content)
+        
+        return {
+            "message": "カスタム音声合成が完了しました",
+            "audio_url": f"/audio/{output_filename}",
+            "filename": output_filename
+        }
+    
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=500, detail=f"音声合成サービスとの通信エラー: {str(e)}")
+
+async def synthesize_voicevox_local(text: str, agent_id: str):
+    """VoiceVoxによる音声合成（ローカル版）"""
+    try:
+        # 簡易版：VoiceVox が利用できない場合、テキスト応答だけを返す
+        # ダミー応答を作成
+        os.makedirs(AUDIO_DIR, exist_ok=True)
+        output_filename = f"dummy_{agent_id}_{uuid.uuid4().hex[:8]}.txt"
+        output_path = os.path.join(AUDIO_DIR, output_filename)
+        
+        # テキストファイルにダミーの応答を保存（実際の音声ファイルの代わり）
+        with open(output_path, 'w') as f:
+            f.write(f"テキスト応答: {text}")
+        
+        return {
+            "message": "応答を生成しました",
+            "audio_url": f"/audio/{output_filename}",
+            "filename": output_filename
+        }
+        
+        # 本来のVoiceVox APIを使用する場合のコード（コメントアウト）
+        """
+        # VoiceVoxのAPIエンドポイント（ローカル）
+        voicevox_url = "http://localhost:50021"
+        
+        # 音声クエリを作成
+        audio_query_response = requests.post(
+            f"{voicevox_url}/audio_query",
+            params={'text': text, 'speaker': 1}
+        )
+        audio_query_response.raise_for_status()
+        audio_query = audio_query_response.json()
+        
+        # 音声合成を実行
+        synthesis_response = requests.post(
+            f"{voicevox_url}/synthesis",
+            params={'speaker': 1},
+            json=audio_query
+        )
+        synthesis_response.raise_for_status()
+        """
+        
+        # 合成された音声ファイルを保存
+        output_filename = f"voicevox_{agent_id}_{uuid.uuid4().hex[:8]}.wav"
+        output_path = os.path.join(AUDIO_DIR, output_filename)
+        
+        with open(output_path, 'wb') as f:
+            f.write(synthesis_response.content)
+        
+        return {
+            "message": "VoiceVox音声合成が完了しました",
+            "audio_url": f"/audio/{output_filename}",
+            "filename": output_filename
+        }
+    
+    except requests.exceptions.RequestException as e:
+        # VoiceVoxが利用できない場合はエラー
+        raise HTTPException(status_code=503, detail=f"VoiceVoxサービスが利用できません: {str(e)}")
+
+@router.post("/{agent_id}", response_model=schemas.ChatResponse)
+async def chat_with_agent(
+    agent_id: str,
+    chat_request: schemas.ChatRequest,
+    voice_type: Optional[str] = "voicevox",
+    db: Session = Depends(get_db)
+):
+    try:
+        # エージェントの存在確認
+        agent = crud.get_agent(db, agent_id=agent_id)
+        if agent is None:
+            # エージェントが見つからない場合でも、エラーを返さずにダミーエージェントを使用
+            print(f"エージェントが見つかりません: {agent_id}")
+            # ダミーエージェント情報を設定
+            personality1 = "フレンドリーな"
+            personality2 = "親切な"
+            tone = "丁寧"
+        else:
+            personality1 = agent.personality1
+            personality2 = agent.personality2
+            tone = agent.tone
+        
+        # メッセージ履歴の取得（ユーザーIDが提供されている場合）
+        message_history = []
+        try:
+            if chat_request.user_id:
+                conversations = crud.get_conversations(
+                    db, 
+                    user_id=chat_request.user_id, 
+                    agent_id=agent_id, 
+                    limit=5
+                )
+                
+                for conv in reversed(conversations):
+                    message_history.append({"role": "user", "content": conv.user_message})
+                    message_history.append({"role": "assistant", "content": conv.agent_response})
+        except Exception as e:
+            print(f"会話履歴の取得に失敗: {str(e)}")
+            # 失敗しても処理を継続
+        
+        # システムプロンプトの作成
+        system_prompt = f"あなたは{personality1}"
+        if personality2:
+            system_prompt += f"かつ{personality2}"
+        system_prompt += f"なAIです。{tone}な口調で話してください。"
+        
+        # メッセージの作成
+        messages = [{"role": "system", "content": system_prompt}]
+        messages.extend(message_history)
+        messages.append({"role": "user", "content": chat_request.user_message})
+        
+        # テキスト応答を生成
+        try:
+            text_response = await api_service.generate_text_response(messages)
+        except Exception as e:
+            print(f"テキスト応答の生成に失敗: {str(e)}")
+            text_response = f"すみません、あなたのメッセージ「{chat_request.user_message}」に対する応答を生成できませんでした。"
+    
+    # 音声合成を実行
+    try:
+        if voice_type == "custom":
+            try:
+                voice_result = await synthesize_custom_voice_local(text_response, agent_id)
+            except Exception as custom_error:
+                print(f"カスタム音声合成エラー: {str(custom_error)}")
+                voice_result = await synthesize_voicevox_local(text_response, agent_id)
+        else:
+            voice_result = await synthesize_voicevox_local(text_response, agent_id)
+    except Exception as voice_error:
+        print(f"音声合成エラー: {str(voice_error)}")
+        # 音声合成に失敗した場合のデフォルト値
+        voice_result = {
+            "audio_url": "/audio/default.wav",  # デフォルトの音声ファイル
+            "filename": "default.wav"
+        }
+    
+    # 会話履歴を保存（ユーザーIDが提供されている場合）
+    try:
+        if chat_request.user_id:
+            crud.create_conversation(
+                db, 
+                user_id=chat_request.user_id,
+                agent_id=agent_id,
+                user_message=chat_request.user_message,
+                agent_response=text_response
+            )
+    except Exception as db_error:
+        print(f"会話履歴の保存エラー: {str(db_error)}")
+        # 保存に失敗しても処理は続行
+    
+    return {
+        "text": text_response,
+        "audio_url": voice_result.get("audio_url", "/audio/default.wav"),
+        "audio_data": None  # 必要に応じてBase64エンコードした音声データ
+    }
+except Exception as e:
+    # 処理全体のエラーハンドリング
+    print(f"チャット処理エラー: {str(e)}")
+    return {
+        "text": "申し訳ありません。エラーが発生しました。",
+        "audio_url": "/audio/default.wav",
+        "audio_data": None
+    }
+
+@router.get("/audio/{filename}")
+async def get_audio_file(filename: str):
+    file_path = os.path.join("audio_files", filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="Audio file not found")
+    return FileResponse(file_path, media_type="audio/wav")
