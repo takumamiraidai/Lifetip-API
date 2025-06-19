@@ -184,6 +184,30 @@ async def synthesize_voice(
     """音声合成を実行"""
     try:
         print(f"Synthesis request: voice_type={voice_type}, agent_id={agent_id}, speaker_id={speaker_id}")
+        
+        # カスタム音声を使用する場合、ファイルが存在するか事前チェック
+        if voice_type == "custom":
+            reference_audio = f"{agent_id}.wav"
+            reference_path = os.path.join(AUDIO_DIR, reference_audio)
+            
+            if not os.path.exists(reference_path):
+                print(f"カスタム音声ファイル {reference_audio} が見つからないため、VoiceVoxを使用します")
+                # カスタム音声ファイルがない場合は自動的にvoicevoxに切り替え
+                voice_type = "voicevox"
+                
+                # エージェント情報も更新
+                from app.db.database import get_db
+                db = next(get_db())
+                from app.crud import crud
+                
+                db_agent = crud.get_agent(db, agent_id=agent_id)
+                if db_agent:
+                    db_agent.voice_type = "voicevox"
+                    db_agent.has_custom_voice = False
+                    db.commit()
+                    print(f"エージェント {agent_id} の音声設定をVoiceVoxに更新しました")
+        
+        # 最終的な音声タイプに基づいて処理
         if voice_type == "custom":
             # カスタム音声合成（アップロードされた音声を使用）
             return await synthesize_custom_voice(text, agent_id)
@@ -192,7 +216,14 @@ async def synthesize_voice(
             return await synthesize_voicevox(text, agent_id, speaker_id)
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"音声合成エラー: {str(e)}")
+        print(f"音声合成エラー: {str(e)}")
+        # どのような場合でもVoiceVoxでのフォールバックを試みる
+        try:
+            print("例外発生後のVoiceVoxフォールバック処理を実行")
+            return await synthesize_voicevox(text, agent_id, speaker_id)
+        except Exception as fallback_error:
+            print(f"フォールバック処理も失敗: {str(fallback_error)}")
+            raise HTTPException(status_code=500, detail=f"音声合成エラー: {str(e)}")
 
 async def synthesize_custom_voice(text: str, agent_id: str):
     """カスタム音声による音声合成"""
@@ -202,7 +233,9 @@ async def synthesize_custom_voice(text: str, agent_id: str):
     
     # ファイルが存在するか確認
     if not os.path.exists(reference_path):
-        raise HTTPException(status_code=404, detail=f"このエージェントの音声ファイル ({reference_audio}) が見つかりません")
+        print(f"警告: 音声ファイル {reference_audio} が見つかりません。VoiceVoxにフォールバックします。")
+        # VoiceVoxでのフォールバックを自動的に適用
+        return await synthesize_voicevox(text, agent_id, 1)
     
     try:
         print(f"カスタム音声合成開始: agent_id={agent_id}, reference_audio={reference_audio}")
