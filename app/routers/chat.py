@@ -50,38 +50,49 @@ async def chat_with_agent(
     messages.extend(message_history)
     messages.append({"role": "user", "content": chat_request.user_message})
     
+    # 音声処理専用のタイムアウト設定
     try:
-        # チャットAPIと音声APIを呼び出す（タイムアウトを設定）
-        result = await asyncio.wait_for(
-            api_service.process_chat_and_voice(messages, chat_request.user_id, agent_id),
-            timeout=180.0  # クライアント側と同じ3分のタイムアウト
-        )
-        
-        # 会話履歴を保存（ユーザーIDが提供されている場合）
-        if chat_request.user_id:
-            crud.create_conversation(
-                db, 
-                user_id=chat_request.user_id,
-                agent_id=agent_id,
-                user_message=chat_request.user_message,
-                agent_response=result["text"]
+        # テキスト生成部分と音声生成部分を段階的に処理
+        try:
+            # チャットAPIと音声APIを呼び出す（タイムアウトを設定）
+            result = await asyncio.wait_for(
+                api_service.process_chat_and_voice(messages, chat_request.user_id, agent_id),
+                timeout=180.0  # 3分のタイムアウト
             )
-        
-        # 音声ファイルのURLを生成
-        audio_filename = os.path.basename(result["audio_path"])
-        audio_url = f"/audio/{audio_filename}"
-        
-        return {
-            "text": result["text"],
-            "audio_url": audio_url,
-            "audio_data": result["audio_data"]  # Base64エンコードされた音声データを返す
-        }
-    except asyncio.TimeoutError:
-        raise HTTPException(
-            status_code=504,  # Gateway Timeout
-            detail="処理に時間がかかりすぎています。もう少し短いメッセージでお試しください。"
-        )
+            
+            # 会話履歴を保存（ユーザーIDが提供されている場合）
+            if chat_request.user_id and result["text"]:
+                crud.create_conversation(
+                    db, 
+                    user_id=chat_request.user_id,
+                    agent_id=agent_id,
+                    user_message=chat_request.user_message,
+                    agent_response=result["text"]
+                )
+            
+            # 音声ファイルのURLを生成（音声パスが空でない場合のみ）
+            audio_url = ""
+            if result["audio_path"]:
+                audio_filename = os.path.basename(result["audio_path"])
+                audio_url = f"/audio/{audio_filename}"
+            
+            # レスポンスを構築する
+            return {
+                "text": result["text"],
+                "audio_url": audio_url,
+                "audio_data": result.get("audio_data", "")  # Base64エンコードされた音声データを返す
+            }
+            
+        except asyncio.TimeoutError:
+            print("チャットと音声処理がタイムアウトしました")
+            # テキストだけ先に返すフォールバック処理
+            raise HTTPException(
+                status_code=504,  # Gateway Timeout
+                detail="処理に時間がかかりすぎています。もう少し短いメッセージでお試しください。"
+            )
     except Exception as e:
+        print(f"チャットエンドポイント例外: {str(e)}")
+        # 重大なエラーの場合、500エラーを返す
         raise HTTPException(
             status_code=500,
             detail=f"内部サーバーエラー: {str(e)}"

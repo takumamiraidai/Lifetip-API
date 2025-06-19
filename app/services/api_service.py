@@ -151,10 +151,10 @@ async def process_chat_and_voice(messages, user_id=None, agent_id=None):
         print(f"カスタム音声合成を使用: agent_id={agent_id}")
         try:
             # 外部音声合成サービスを呼び出す
-            import requests
             import uuid
             import aiofiles
             import base64
+            import asyncio
             
             AUDIO_DIR = "audio_files"
             VOICE_SYNTHESIS_URL = os.getenv("CUSTOM_VOICE_API_URL", "http://localhost:8000")
@@ -168,43 +168,64 @@ async def process_chat_and_voice(messages, user_id=None, agent_id=None):
             
             generate_url = f"{VOICE_SYNTHESIS_URL}/generate"
             print(f"カスタム音声合成リクエスト: {generate_url}")
+            print(f"音声合成パラメータ: {synthesis_data}")
             
-            synthesis_response = requests.post(
-                generate_url,
-                data=synthesis_data,
-                timeout=120  # カスタム音声合成のタイムアウトを延長（2分）
-            )
-            
-            if synthesis_response.status_code == 200:
-                # 音声ファイルを保存
-                output_filename = f"generated_{agent_id}_{uuid.uuid4().hex[:8]}.wav"
-                filepath = os.path.join(AUDIO_DIR, output_filename)
-                
-                async with aiofiles.open(filepath, 'wb') as f:
-                    await f.write(synthesis_response.content)
-                
-                # Base64エンコードされた音声データを返す
-                audio_data_base64 = base64.b64encode(synthesis_response.content).decode('utf-8')
-                
-                audio_result = {
-                    "filepath": filepath,
-                    "audio_data": audio_data_base64
-                }
-                print(f"カスタム音声合成成功: {filepath}")
-            else:
-                print(f"カスタム音声合成エラー: {synthesis_response.status_code}")
-                raise Exception(f"カスタム音声合成エラー: {synthesis_response.status_code} {synthesis_response.reason}")
+            # 非同期HTTPクライアントを使用
+            async with httpx.AsyncClient() as client:
+                try:
+                    print(f"音声合成リクエスト送信中: {generate_url}")
+                    synthesis_response = await client.post(
+                        generate_url,
+                        data=synthesis_data,
+                        timeout=120.0  # カスタム音声合成のタイムアウトを延長（2分）
+                    )
+                    
+                    if synthesis_response.status_code == 200:
+                        # 音声ファイルを保存
+                        output_filename = f"generated_{agent_id}_{uuid.uuid4().hex[:8]}.wav"
+                        filepath = os.path.join(AUDIO_DIR, output_filename)
+                        
+                        async with aiofiles.open(filepath, 'wb') as f:
+                            await f.write(synthesis_response.content)
+                        
+                        # Base64エンコードされた音声データを返す
+                        audio_data_base64 = base64.b64encode(synthesis_response.content).decode('utf-8')
+                        
+                        audio_result = {
+                            "filepath": filepath,
+                            "audio_data": audio_data_base64
+                        }
+                        print(f"音声合成完了: {output_filename}")
+                        print(f"カスタム音声合成成功: {filepath}")
+                    else:
+                        print(f"カスタム音声合成エラー: {synthesis_response.status_code}")
+                        raise Exception(f"カスタム音声合成エラー: {synthesis_response.status_code} {synthesis_response.text}")
+                except httpx.TimeoutException as timeout_err:
+                    print(f"音声合成API接続エラー: {str(timeout_err)}")
+                    raise Exception(f"音声合成タイムアウト: {str(timeout_err)}")
+                except Exception as req_err:
+                    print(f"リクエスト例外: {str(req_err)}")
+                    raise Exception(f"リクエスト例外: {str(req_err)}")
         except Exception as custom_err:
-            print(f"カスタム音声合成例外: {str(custom_err)}。VoiceVoxにフォールバック")
+            print(f"カスタム音声合成例外: {str(custom_err)}。VoiceVoxにフォールバックを試行します。")
     
     # カスタム音声合成に失敗したか、そもそもカスタム音声を使用しない場合はVoiceVoxを使用
     if audio_result is None:
-        print(f"VoiceVox音声合成を使用: speaker_id={speaker_id}")
-        # 音声クエリを生成
-        audio_query = await create_audio_query(response_text, speaker=speaker_id)
-        
-        # 音声を合成
-        audio_result = await synthesize_speech(audio_query, speaker=speaker_id)
+        try:
+            print(f"VoiceVox音声合成を使用: speaker_id={speaker_id}")
+            # 音声クエリを生成
+            audio_query = await create_audio_query(response_text, speaker=speaker_id)
+            
+            # 音声を合成
+            audio_result = await synthesize_speech(audio_query, speaker=speaker_id)
+        except Exception as voicevox_err:
+            print(f"VoiceVox合成エラー: {str(voicevox_err)}")
+            # 最終的なフォールバック: 音声なしでテキストだけ返す
+            return {
+                "text": response_text,
+                "audio_path": "",
+                "audio_data": ""  # 音声データなし
+            }
     
     # 結果を返す
     return {
