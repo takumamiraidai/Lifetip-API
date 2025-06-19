@@ -17,6 +17,7 @@ router = APIRouter(
 async def chat_with_agent(
     agent_id: str,
     chat_request: schemas.ChatRequest,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
     # エージェントの存在確認
@@ -49,8 +50,14 @@ async def chat_with_agent(
     messages.extend(message_history)
     messages.append({"role": "user", "content": chat_request.user_message})
     
-    # チャットAPIと音声APIを呼び出す
-    result = await api_service.process_chat_and_voice(messages, chat_request.user_id, agent_id)
+    # カスタム音声合成を使用するかチェック
+    use_custom_voice = False
+    if agent.voice_type == "custom" and agent.has_custom_voice:
+        use_custom_voice = True
+    
+    # 高速レスポンスモード - テキスト生成のみを先に実行
+    # まずテキスト応答だけを取得
+    text_result = await api_service.generate_chat_response(messages)
     
     # 会話履歴を保存（ユーザーIDが提供されている場合）
     if chat_request.user_id:
@@ -59,18 +66,44 @@ async def chat_with_agent(
             user_id=chat_request.user_id,
             agent_id=agent_id,
             user_message=chat_request.user_message,
-            agent_response=result["text"]
+            agent_response=text_result
         )
     
-    # 音声ファイルのURLを生成
-    audio_filename = os.path.basename(result["audio_path"])
+    # 音声合成を非同期で実行（バックグラウンドタスク）
+    audio_filename = f"processing_{agent_id}_{os.urandom(4).hex()}.wav"
     audio_url = f"/audio/{audio_filename}"
     
-    return {
-        "text": result["text"],
-        "audio_url": audio_url,
-        "audio_data": result["audio_data"]  # Base64エンコードされた音声データを返す
-    }
+    # 音声合成を実行（バックグラウンドで）
+    if use_custom_voice:
+        print(f"カスタム音声合成をバックグラウンドで実行: agent_id={agent_id}")
+        # 合成が完了したら他のタスクをするためにスピーカーIDも渡す
+        background_tasks.add_task(
+            api_service.synthesize_voice_background, 
+            text_result, 
+            agent_id, 
+            agent.voice_speaker_id,
+            "custom"
+        )
+        # カスタム音声合成中と表示するための特別なレスポンス
+        return {
+            "text": text_result,
+            "audio_url": "/processing",  # 特別な値で処理中を表す
+            "audio_data": None,  # カスタム音声は時間がかかるのでまずNullを返す
+            "processing": True   # 処理中フラグ
+        }
+    else:
+        # 通常のVoiceVox音声合成（これは比較的早いので、同期的に実行）
+        result = await api_service.process_text_to_voice(text_result, agent_id, agent.voice_speaker_id)
+        
+        # 音声ファイルのURLを生成
+        audio_filename = os.path.basename(result["filepath"])
+        audio_url = f"/audio/{audio_filename}"
+        
+        return {
+            "text": text_result,
+            "audio_url": audio_url,
+            "audio_data": result["audio_data"]  # Base64エンコードされた音声データ
+        }
 
 @router.get("/audio/{filename}")
 async def get_audio_file(filename: str):
