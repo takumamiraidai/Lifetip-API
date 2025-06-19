@@ -47,18 +47,25 @@ async def upload_voice(
         mime_type = file.content_type
         print(f"アップロードされたファイル: {file.filename}, MIME type: {mime_type}")
         
-        # エージェントIDをファイル名にし、拡張子を元の拡張子に一致させる
-        # ただし、最終的な保存先は.wavとする
-        # カスタム音声APIの制限に対応するため
-        temp_filename = f"{agent_id}{original_extension}"
-        filename = f"{agent_id}.wav"
-        temp_file_path = os.path.join(AUDIO_DIR, temp_filename)
+        # エージェントIDをファイル名として、最終的には.wav拡張子を使用
+        # 既存のファイルと競合しないよう、一時ファイルには別の名前を使用
+        filename = f"{agent_id}.wav"  # 最終ファイル名
+        temp_filename = f"{agent_id}_temp{original_extension}"  # 一時ファイル名
         file_path = os.path.join(AUDIO_DIR, filename)
+        temp_file_path = os.path.join(AUDIO_DIR, temp_filename)
         
         # ディレクトリが存在しない場合は作成
         os.makedirs(AUDIO_DIR, exist_ok=True)
         
-        # まず元のフォーマットでファイルを保存
+        # 既存のファイルがあれば削除（上書き前にクリーンアップ）
+        if os.path.exists(file_path):
+            try:
+                os.remove(file_path)
+                print(f"既存のファイルを削除: {file_path}")
+            except Exception as rm_err:
+                print(f"既存ファイル削除エラー（無視して続行）: {str(rm_err)}")
+        
+        # まず元のフォーマットで一時ファイルに保存
         with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
             
@@ -66,6 +73,14 @@ async def upload_voice(
         try:
             import subprocess
             
+            # 入力と出力が同じ場合は一時的な変換先ファイルを作成
+            # エラーを防ぐために、違うパスを使用
+            if temp_file_path == file_path:
+                print(f"警告: 入力と出力が同じファイルのため、一時ファイルを作成します")
+                intermediate_path = os.path.join(AUDIO_DIR, f"temp_{uuid.uuid4().hex}.wav")
+            else:
+                intermediate_path = file_path
+                
             # FFmpegコマンドを構築 - PCM 16bitのWAV形式に変換
             cmd = [
                 'ffmpeg',
@@ -74,7 +89,7 @@ async def upload_voice(
                 '-acodec', 'pcm_s16le',  # 16-bit PCM
                 '-ar', '44100',  # サンプリングレート
                 '-ac', '1',      # モノラル
-                file_path        # 出力ファイル
+                intermediate_path  # 出力ファイル
             ]
             
             print(f"FFmpeg変換コマンド: {' '.join(cmd)}")
@@ -88,19 +103,26 @@ async def upload_voice(
             stdout, stderr = process.communicate()
             
             if process.returncode == 0:
-                print(f"FFmpegによる変換成功: {temp_file_path} -> {file_path}")
-                # 変換成功したら一時ファイルを削除
-                os.remove(temp_file_path)
+                print(f"FFmpegによる変換成功: {temp_file_path} -> {intermediate_path}")
+                # 中間ファイルが最終ファイルと違う場合は、最終ファイルにコピー
+                if intermediate_path != file_path:
+                    shutil.copy(intermediate_path, file_path)
+                    os.remove(intermediate_path)
+                # 元の一時ファイルと最終ファイルが違う場合のみ削除
+                if temp_file_path != file_path and os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
             else:
                 print(f"FFmpegによる変換失敗: {stderr.decode()}")
-                # 変換失敗した場合は元のファイルをコピー
-                shutil.copy(temp_file_path, file_path)
-                print(f"元のファイルをコピー: {temp_file_path} -> {file_path}")
+                # 変換失敗した場合は元のファイルをコピー（入出力が別の場合のみ）
+                if temp_file_path != file_path:
+                    shutil.copy(temp_file_path, file_path)
+                    print(f"元のファイルをコピー: {temp_file_path} -> {file_path}")
         except Exception as conv_err:
             print(f"音声変換エラー（FFmpegが利用できないかも）: {str(conv_err)}")
-            # 変換失敗した場合は元のファイルをコピー
-            shutil.copy(temp_file_path, file_path)
-            print(f"元のファイルをコピー: {temp_file_path} -> {file_path}")
+            # 変換失敗した場合は元のファイルをコピー（入出力が別の場合のみ）
+            if temp_file_path != file_path and not os.path.exists(file_path):
+                shutil.copy(temp_file_path, file_path)
+                print(f"元のファイルをコピー: {temp_file_path} -> {file_path}")
         
         # 外部音声サービスにもアップロード
         try:
@@ -223,33 +245,45 @@ async def synthesize_custom_voice(text: str, agent_id: str):
         
         print(f"音声合成パラメータ: {synthesis_data}")
         
-        synthesis_response = requests.post(
-            generate_url,
-            data=synthesis_data
-        )
-        
-        if synthesis_response.status_code != 200:
-            error_detail = f"音声合成リクエストエラー: {synthesis_response.status_code} {synthesis_response.reason}"
-            try:
-                error_detail += f" {synthesis_response.text}"
-            except:
-                pass
-            print(f"合成エラー: {error_detail}")
-            raise HTTPException(status_code=500, detail=error_detail)
-        
-        # 合成された音声ファイルを保存
-        output_filename = f"generated_{agent_id}_{uuid.uuid4().hex[:8]}.wav"
-        output_path = os.path.join(AUDIO_DIR, output_filename)
-        
-        with open(output_path, 'wb') as f:
-            f.write(synthesis_response.content)
-        
-        print(f"音声合成完了: {output_filename}")
-        return {
-            "message": "カスタム音声合成が完了しました",
-            "audio_url": f"/audio/{output_filename}",
-            "filename": output_filename
-        }
+        print(f"音声合成リクエスト送信中: {generate_url}")
+        try:
+            synthesis_response = requests.post(
+                generate_url,
+                data=synthesis_data,
+                timeout=30  # タイムアウト30秒
+            )
+            
+            if synthesis_response.status_code != 200:
+                error_detail = f"音声合成リクエストエラー: {synthesis_response.status_code} {synthesis_response.reason}"
+                try:
+                    error_detail += f" {synthesis_response.text}"
+                except:
+                    pass
+                print(f"合成エラー: {error_detail}")
+                
+                # VoiceVoxでのフォールバック処理を試行
+                print("カスタム音声での合成に失敗しました。VoiceVoxでのフォールバックを試行します。")
+                return await synthesize_voicevox(text, agent_id, 1)  # VoiceVoxのデフォルトスピーカーで合成
+            
+            # 合成された音声ファイルを保存
+            output_filename = f"generated_{agent_id}_{uuid.uuid4().hex[:8]}.wav"
+            output_path = os.path.join(AUDIO_DIR, output_filename)
+            
+            with open(output_path, 'wb') as f:
+                f.write(synthesis_response.content)
+            
+            print(f"音声合成完了: {output_filename}")
+            return {
+                "message": "カスタム音声合成が完了しました",
+                "audio_url": f"/audio/{output_filename}",
+                "filename": output_filename
+            }
+            
+        except requests.RequestException as req_err:
+            print(f"音声合成API接続エラー: {str(req_err)}")
+            # VoiceVoxでのフォールバック処理を試行
+            print("カスタム音声での合成に失敗しました。VoiceVoxでのフォールバックを試行します。")
+            return await synthesize_voicevox(text, agent_id, 1)  # VoiceVoxのデフォルトスピーカーで合成
     
     except requests.exceptions.RequestException as e:
         error_message = f"音声合成サービスとの通信エラー: {str(e)}"
