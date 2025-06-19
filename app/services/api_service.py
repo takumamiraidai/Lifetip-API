@@ -124,22 +124,87 @@ async def process_chat_and_voice(messages, user_id=None, agent_id=None):
     if not response_text:
         raise HTTPException(status_code=500, detail="No response text received from chat API")
     
-    # エージェントのスピーカーIDを取得
+    # エージェントの音声タイプとスピーカーIDを取得
     speaker_id = 1  # デフォルト値
+    voice_type = "voicevox"  # デフォルト値
+    use_custom_voice = False
+    
     if agent_id:
         from app.db.database import get_db
         from app.crud import crud
         db = next(get_db())
         db_agent = crud.get_agent(db, agent_id=agent_id)
-        if db_agent and db_agent.voice_speaker_id:
-            speaker_id = db_agent.voice_speaker_id
-            print(f"Using agent's voice_speaker_id: {speaker_id} for chat response synthesis")
+        if db_agent:
+            # 音声タイプとカスタム音声設定を取得
+            if db_agent.voice_speaker_id:
+                speaker_id = db_agent.voice_speaker_id
+            if db_agent.voice_type:
+                voice_type = db_agent.voice_type
+            if db_agent.has_custom_voice:
+                use_custom_voice = bool(db_agent.has_custom_voice)
+            
+            print(f"Agent voice settings: type={voice_type}, custom={use_custom_voice}, speaker_id={speaker_id}")
     
-    # 音声クエリを生成
-    audio_query = await create_audio_query(response_text)
+    # カスタム音声を使用するか判断
+    audio_result = None
+    if voice_type == "custom" and use_custom_voice:
+        print(f"カスタム音声合成を使用: agent_id={agent_id}")
+        try:
+            # 外部音声合成サービスを呼び出す
+            import requests
+            import uuid
+            import aiofiles
+            import base64
+            
+            AUDIO_DIR = "audio_files"
+            VOICE_SYNTHESIS_URL = os.getenv("CUSTOM_VOICE_API_URL", "http://localhost:8000")
+            
+            # カスタム音声合成リクエスト
+            synthesis_data = {
+                'text': response_text,
+                'wav_filename': f"{agent_id}.wav",
+                'language': 'ja'
+            }
+            
+            generate_url = f"{VOICE_SYNTHESIS_URL}/generate"
+            print(f"カスタム音声合成リクエスト: {generate_url}")
+            
+            synthesis_response = requests.post(
+                generate_url,
+                data=synthesis_data,
+                timeout=30
+            )
+            
+            if synthesis_response.status_code == 200:
+                # 音声ファイルを保存
+                output_filename = f"generated_{agent_id}_{uuid.uuid4().hex[:8]}.wav"
+                filepath = os.path.join(AUDIO_DIR, output_filename)
+                
+                async with aiofiles.open(filepath, 'wb') as f:
+                    await f.write(synthesis_response.content)
+                
+                # Base64エンコードされた音声データを返す
+                audio_data_base64 = base64.b64encode(synthesis_response.content).decode('utf-8')
+                
+                audio_result = {
+                    "filepath": filepath,
+                    "audio_data": audio_data_base64
+                }
+                print(f"カスタム音声合成成功: {filepath}")
+            else:
+                print(f"カスタム音声合成エラー: {synthesis_response.status_code}")
+                raise Exception(f"カスタム音声合成エラー: {synthesis_response.status_code} {synthesis_response.reason}")
+        except Exception as custom_err:
+            print(f"カスタム音声合成例外: {str(custom_err)}。VoiceVoxにフォールバック")
     
-    # 音声を合成
-    audio_result = await synthesize_speech(audio_query, speaker=speaker_id)
+    # カスタム音声合成に失敗したか、そもそもカスタム音声を使用しない場合はVoiceVoxを使用
+    if audio_result is None:
+        print(f"VoiceVox音声合成を使用: speaker_id={speaker_id}")
+        # 音声クエリを生成
+        audio_query = await create_audio_query(response_text, speaker=speaker_id)
+        
+        # 音声を合成
+        audio_result = await synthesize_speech(audio_query, speaker=speaker_id)
     
     # 結果を返す
     return {
