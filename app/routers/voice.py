@@ -131,11 +131,36 @@ async def synthesize_custom_voice(text: str, agent_id: str):
     try:
         print(f"カスタム音声合成開始: agent_id={agent_id}, reference_audio={reference_audio}")
         
+        # ファイルを再度アップロード処理してから合成を実行（フォーマット問題を解決するため）
+        try:
+            print(f"音声ファイル再アップロード中: {VOICE_SYNTHESIS_URL}/upload")
+            with open(reference_path, "rb") as audio_file:
+                upload_files = {
+                    'file': (reference_audio, audio_file, 'audio/wav')
+                }
+                upload_data = {
+                    'filename': agent_id
+                }
+                
+                upload_response = requests.post(
+                    f"{VOICE_SYNTHESIS_URL}/upload",
+                    files=upload_files,
+                    data=upload_data
+                )
+                
+                if upload_response.status_code != 200:
+                    print(f"警告: 音声ファイル再アップロードでエラー: {upload_response.status_code} {upload_response.reason}")
+                    print(f"合成処理を継続します")
+                else:
+                    print(f"音声ファイル再アップロード成功: {upload_response.status_code}")
+        except Exception as reupload_err:
+            print(f"音声ファイル再アップロード中にエラー（無視して続行）: {str(reupload_err)}")
+        
         # 外部音声合成APIを使用して合成
         generate_url = f"{VOICE_SYNTHESIS_URL}/generate"
         print(f"音声生成リクエスト: {generate_url}")
         
-        # 新しい音声合成リクエスト形式
+        # 新しい音声合成リクエスト形式 
         synthesis_data = {
             'text': text,
             'wav_filename': f"{agent_id}.wav",  # 保存済みのエージェントIDを使用

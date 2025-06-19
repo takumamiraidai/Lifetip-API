@@ -50,7 +50,7 @@ async def create_chat_response(messages):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to call chat API: {str(e)}")
 
-async def create_audio_query(text, speaker=1):
+async def create_audio_query(text, speaker):
     """
     テキストから音声クエリを生成する
     """
