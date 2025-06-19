@@ -250,7 +250,7 @@ async def synthesize_custom_voice(text: str, agent_id: str):
             synthesis_response = requests.post(
                 generate_url,
                 data=synthesis_data,
-                timeout=30  # タイムアウト30秒
+                timeout=120  # タイムアウトを120秒（2分）に延長
             )
             
             if synthesis_response.status_code != 200:
@@ -283,7 +283,20 @@ async def synthesize_custom_voice(text: str, agent_id: str):
             print(f"音声合成API接続エラー: {str(req_err)}")
             # VoiceVoxでのフォールバック処理を試行
             print("カスタム音声での合成に失敗しました。VoiceVoxでのフォールバックを試行します。")
-            return await synthesize_voicevox(text, agent_id, 1)  # VoiceVoxのデフォルトスピーカーで合成
+            try:
+                return await synthesize_voicevox(text, agent_id, 1)  # VoiceVoxのデフォルトスピーカーで合成
+            except Exception as voicevox_err:
+                print(f"VoiceVoxフォールバックエラー: {str(voicevox_err)}")
+                # 最終的なフォールバック - 空のファイルを作成して返す（エラーを防ぐ）
+                empty_audio_path = os.path.join(AUDIO_DIR, f"empty_{uuid.uuid4().hex[:8]}.wav")
+                with open(empty_audio_path, 'wb') as f:
+                    # 最小限のWAVヘッダーを書き込む（無音の短いファイル）
+                    f.write(b'RIFF\x1c\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00')
+                return {
+                    "message": "音声合成は失敗しましたが、テキスト応答は利用可能です",
+                    "audio_url": f"/audio/{os.path.basename(empty_audio_path)}",
+                    "filename": os.path.basename(empty_audio_path)
+                }
     
     except requests.exceptions.RequestException as e:
         error_message = f"音声合成サービスとの通信エラー: {str(e)}"
