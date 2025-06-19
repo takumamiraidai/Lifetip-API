@@ -169,11 +169,10 @@ async def process_chat_and_voice(messages, user_id=None, agent_id=None):
             generate_url = f"{VOICE_SYNTHESIS_URL}/generate"
             print(f"カスタム音声合成リクエスト: {generate_url}")
             
-            # タイムアウト時間を延長（120秒）
             synthesis_response = requests.post(
                 generate_url,
                 data=synthesis_data,
-                timeout=120  # タイムアウトを2分に延長
+                timeout=30
             )
             
             if synthesis_response.status_code == 200:
