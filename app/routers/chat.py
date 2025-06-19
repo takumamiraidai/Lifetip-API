@@ -7,6 +7,7 @@ from app.crud import crud
 from app.services import api_service
 import os
 from typing import Optional, List
+import asyncio
 
 router = APIRouter(
     prefix="/chat",
@@ -49,28 +50,42 @@ async def chat_with_agent(
     messages.extend(message_history)
     messages.append({"role": "user", "content": chat_request.user_message})
     
-    # チャットAPIと音声APIを呼び出す
-    result = await api_service.process_chat_and_voice(messages, chat_request.user_id, agent_id)
-    
-    # 会話履歴を保存（ユーザーIDが提供されている場合）
-    if chat_request.user_id:
-        crud.create_conversation(
-            db, 
-            user_id=chat_request.user_id,
-            agent_id=agent_id,
-            user_message=chat_request.user_message,
-            agent_response=result["text"]
+    try:
+        # チャットAPIと音声APIを呼び出す（タイムアウトを設定）
+        result = await asyncio.wait_for(
+            api_service.process_chat_and_voice(messages, chat_request.user_id, agent_id),
+            timeout=180.0  # クライアント側と同じ3分のタイムアウト
         )
-    
-    # 音声ファイルのURLを生成
-    audio_filename = os.path.basename(result["audio_path"])
-    audio_url = f"/audio/{audio_filename}"
-    
-    return {
-        "text": result["text"],
-        "audio_url": audio_url,
-        "audio_data": result["audio_data"]  # Base64エンコードされた音声データを返す
-    }
+        
+        # 会話履歴を保存（ユーザーIDが提供されている場合）
+        if chat_request.user_id:
+            crud.create_conversation(
+                db, 
+                user_id=chat_request.user_id,
+                agent_id=agent_id,
+                user_message=chat_request.user_message,
+                agent_response=result["text"]
+            )
+        
+        # 音声ファイルのURLを生成
+        audio_filename = os.path.basename(result["audio_path"])
+        audio_url = f"/audio/{audio_filename}"
+        
+        return {
+            "text": result["text"],
+            "audio_url": audio_url,
+            "audio_data": result["audio_data"]  # Base64エンコードされた音声データを返す
+        }
+    except asyncio.TimeoutError:
+        raise HTTPException(
+            status_code=504,  # Gateway Timeout
+            detail="処理に時間がかかりすぎています。もう少し短いメッセージでお試しください。"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"内部サーバーエラー: {str(e)}"
+        )
 
 @router.get("/audio/{filename}")
 async def get_audio_file(filename: str):

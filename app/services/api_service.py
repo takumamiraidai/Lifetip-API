@@ -39,7 +39,7 @@ async def create_chat_response(messages):
                 CHAT_API_URL, 
                 json=payload, 
                 headers=headers,
-                timeout=30.0
+                timeout=120.0  # チャットAPI呼び出しのタイムアウトを延長（2分）
             )
             
             if response.status_code != 200:
@@ -60,7 +60,7 @@ async def create_audio_query(text, speaker):
             response = await client.post(
                 f"{AUDIO_QUERY_API_URL}?text={text}&speaker={speaker}",
                 headers={"accept": "application/json"},
-                timeout=30.0
+                timeout=60.0  # 音声クエリAPIのタイムアウトを延長（1分）
             )
             
             if response.status_code != 200:
@@ -88,7 +88,7 @@ async def synthesize_speech(audio_query, speaker=1):
                     "Content-Type": "application/json"
                 },
                 json=audio_query,
-                timeout=30.0
+                timeout=60.0  # 音声合成APIのタイムアウトを延長（1分）
             )
             
             if response.status_code != 200:
@@ -172,7 +172,7 @@ async def process_chat_and_voice(messages, user_id=None, agent_id=None):
             synthesis_response = requests.post(
                 generate_url,
                 data=synthesis_data,
-                timeout=30
+                timeout=120  # カスタム音声合成のタイムアウトを延長（2分）
             )
             
             if synthesis_response.status_code == 200:
