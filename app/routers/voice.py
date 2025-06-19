@@ -35,20 +35,72 @@ async def upload_voice(
 ):
     """エージェント用の音声ファイルをアップロード"""
     try:
-        # ファイル拡張子をチェック
-        if not file.filename.lower().endswith(('.wav', '.mp3', '.ogg', '.flac')):
+        # サポートされている音声形式をチェック（拡張子ベース）
+        # より多くのフォーマットをサポート
+        supported_formats = ('.wav', '.mp3', '.ogg', '.flac', '.webm', '.m4a', '.aac')
+        original_extension = os.path.splitext(file.filename.lower())[1]
+        
+        if not file.filename.lower().endswith(supported_formats):
             raise HTTPException(status_code=400, detail="音声ファイル形式が無効です")
         
-        # エージェントIDをファイル名にし、拡張子を.wavに統一
+        # MIME typeも確認
+        mime_type = file.content_type
+        print(f"アップロードされたファイル: {file.filename}, MIME type: {mime_type}")
+        
+        # エージェントIDをファイル名にし、拡張子を元の拡張子に一致させる
+        # ただし、最終的な保存先は.wavとする
+        # カスタム音声APIの制限に対応するため
+        temp_filename = f"{agent_id}{original_extension}"
         filename = f"{agent_id}.wav"
+        temp_file_path = os.path.join(AUDIO_DIR, temp_filename)
         file_path = os.path.join(AUDIO_DIR, filename)
         
         # ディレクトリが存在しない場合は作成
         os.makedirs(AUDIO_DIR, exist_ok=True)
         
-        # ファイルを保存
-        with open(file_path, "wb") as buffer:
+        # まず元のフォーマットでファイルを保存
+        with open(temp_file_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
+            
+        # 可能であれば、FFmpegを使用して適切なWAV形式に変換を試みる
+        try:
+            import subprocess
+            
+            # FFmpegコマンドを構築 - PCM 16bitのWAV形式に変換
+            cmd = [
+                'ffmpeg',
+                '-y',  # 既存ファイルを上書き
+                '-i', temp_file_path,  # 入力ファイル
+                '-acodec', 'pcm_s16le',  # 16-bit PCM
+                '-ar', '44100',  # サンプリングレート
+                '-ac', '1',      # モノラル
+                file_path        # 出力ファイル
+            ]
+            
+            print(f"FFmpeg変換コマンド: {' '.join(cmd)}")
+            
+            # FFmpegを実行
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            stdout, stderr = process.communicate()
+            
+            if process.returncode == 0:
+                print(f"FFmpegによる変換成功: {temp_file_path} -> {file_path}")
+                # 変換成功したら一時ファイルを削除
+                os.remove(temp_file_path)
+            else:
+                print(f"FFmpegによる変換失敗: {stderr.decode()}")
+                # 変換失敗した場合は元のファイルをコピー
+                shutil.copy(temp_file_path, file_path)
+                print(f"元のファイルをコピー: {temp_file_path} -> {file_path}")
+        except Exception as conv_err:
+            print(f"音声変換エラー（FFmpegが利用できないかも）: {str(conv_err)}")
+            # 変換失敗した場合は元のファイルをコピー
+            shutil.copy(temp_file_path, file_path)
+            print(f"元のファイルをコピー: {temp_file_path} -> {file_path}")
         
         # 外部音声サービスにもアップロード
         try:
@@ -72,9 +124,11 @@ async def upload_voice(
                 
                 if upload_response.status_code != 200:
                     print(f"外部サービスへのアップロード警告: {upload_response.status_code} {upload_response.reason}")
+                    print(f"レスポンス内容: {upload_response.text}")
                     print(f"アプリケーションは動作を継続します")
                 else:
                     print(f"外部サービスへのアップロード成功: {upload_response.status_code}")
+                    print(f"レスポンス内容: {upload_response.text}")
                 
         except Exception as upload_err:
             # 外部サービスへのアップロードに失敗しても、ローカルには保存されているため処理を続行
